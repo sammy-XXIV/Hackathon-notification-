@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime, date, timedelta
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 from supabase import create_client
 import pytz
@@ -164,8 +164,18 @@ async def daily_digest(ctx: ContextTypes.DEFAULT_TYPE):
     await ctx.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
 
 
+async def set_commands(app: Application):
+    await app.bot.set_my_commands([
+        BotCommand("start", "Show available commands"),
+        BotCommand("add", "Add a new hackathon"),
+        BotCommand("list", "View all hackathons"),
+        BotCommand("remove", "Remove a hackathon"),
+        BotCommand("cancel", "Cancel current operation"),
+    ])
+
+
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(set_commands).build()
 
     add_conv = ConversationHandler(
         entry_points=[CommandHandler("add", add_start)],
