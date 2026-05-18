@@ -2,7 +2,7 @@ import os
 import logging
 import httpx
 from datetime import datetime, date
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 import pytz
 
@@ -20,6 +20,11 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 REST = f"{SUPABASE_URL}/rest/v1/hackathons"
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [[KeyboardButton("📋 List"), KeyboardButton("➕ Add"), KeyboardButton("🗑️ Remove")]],
+    resize_keyboard=True,
+)
 
 WAITING_NAME, WAITING_DATE = range(2)
 WARNING_DAYS = 7
@@ -81,7 +86,8 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "👋 Hackathon Tracker Bot\n\n"
         "/add — add a hackathon\n"
         "/list — view all hackathons\n"
-        "/remove — remove a hackathon"
+        "/remove — remove a hackathon",
+        reply_markup=MAIN_KEYBOARD,
     )
 
 
@@ -111,13 +117,14 @@ async def add_date(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     dl = days_left(str(parsed))
     await update.message.reply_text(
         f"✅ *{name}* added!\nEnds: {parsed.strftime('%b %d, %Y')} ({dl} days left)",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+        reply_markup=MAIN_KEYBOARD,
     )
     return ConversationHandler.END
 
 
 async def add_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cancelled.")
+    await update.message.reply_text("Cancelled.", reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
 
@@ -155,7 +162,7 @@ async def remove_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     h = hackathons[idx]
     delete_hackathon(h["id"])
-    await update.message.reply_text(f"🗑️ *{h['name']}* removed.", parse_mode="Markdown")
+    await update.message.reply_text(f"🗑️ *{h['name']}* removed.", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
 
@@ -168,6 +175,16 @@ async def daily_digest(ctx: ContextTypes.DEFAULT_TYPE):
 
     hackathons = get_hackathons()
     await ctx.bot.send_message(chat_id=CHAT_ID, text=format_digest(hackathons), parse_mode="Markdown")
+
+
+async def handle_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == "📋 List":
+        await list_hackathons(update, ctx)
+    elif text == "➕ Add":
+        return await add_start(update, ctx)
+    elif text == "🗑️ Remove":
+        return await remove_start(update, ctx)
 
 
 async def set_commands(app: Application):
@@ -204,6 +221,7 @@ def main():
     app.add_handler(add_conv)
     app.add_handler(remove_conv)
     app.add_handler(CommandHandler("list", list_hackathons))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
 
     job_queue = app.job_queue
     target_time = datetime.now(TIMEZONE).replace(hour=6, minute=0, second=0, microsecond=0)
