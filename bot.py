@@ -33,6 +33,7 @@ TIMEZONE = pytz.timezone("Africa/Lagos")
 
 def get_hackathons():
     res = httpx.get(REST, headers=HEADERS, params={"select": "*", "order": "end_date"})
+    logger.info("GET hackathons: %s %s", res.status_code, res.text)
     return res.json() if res.is_success else []
 
 
