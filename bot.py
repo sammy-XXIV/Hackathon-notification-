@@ -1,9 +1,9 @@
 import os
 import logging
-from datetime import datetime, date, timedelta
+import httpx
+from datetime import datetime, date
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
-from supabase import create_client
 import pytz
 
 logging.basicConfig(level=logging.INFO)
@@ -14,7 +14,12 @@ SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = int(os.environ["CHAT_ID"])
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+}
+REST = f"{SUPABASE_URL}/rest/v1/hackathons"
 
 WAITING_NAME, WAITING_DATE = range(2)
 WARNING_DAYS = 7
@@ -22,13 +27,24 @@ TIMEZONE = pytz.timezone("Africa/Lagos")
 
 
 def get_hackathons():
-    res = supabase.table("hackathons").select("*").order("end_date").execute()
-    return res.data or []
+    res = httpx.get(REST, headers=HEADERS, params={"select": "*", "order": "end_date"})
+    return res.json() if res.is_success else []
+
+
+def insert_hackathon(name, end_date, added_by):
+    httpx.post(REST, headers={**HEADERS, "Prefer": "return=minimal"}, json={
+        "name": name,
+        "end_date": end_date,
+        "added_by": added_by,
+    })
+
+
+def delete_hackathon(hackathon_id):
+    httpx.delete(REST, headers=HEADERS, params={"id": f"eq.{hackathon_id}"})
 
 
 def days_left(end_date_str):
-    end = date.fromisoformat(end_date_str)
-    return (end - date.today()).days
+    return (date.fromisoformat(end_date_str) - date.today()).days
 
 
 def format_digest(hackathons):
@@ -90,12 +106,7 @@ async def add_date(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     name = ctx.user_data["hack_name"]
     added_by = update.effective_user.username or update.effective_user.first_name
-
-    supabase.table("hackathons").insert({
-        "name": name,
-        "end_date": str(parsed),
-        "added_by": added_by
-    }).execute()
+    insert_hackathon(name, str(parsed), added_by)
 
     dl = days_left(str(parsed))
     await update.message.reply_text(
@@ -112,8 +123,7 @@ async def add_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def list_hackathons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     hackathons = get_hackathons()
-    msg = format_digest(hackathons)
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(format_digest(hackathons), parse_mode="Markdown")
 
 
 async def remove_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -144,7 +154,7 @@ async def remove_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return "WAITING_REMOVE"
 
     h = hackathons[idx]
-    supabase.table("hackathons").delete().eq("id", h["id"]).execute()
+    delete_hackathon(h["id"])
     await update.message.reply_text(f"🗑️ *{h['name']}* removed.", parse_mode="Markdown")
     return ConversationHandler.END
 
@@ -152,16 +162,12 @@ async def remove_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def daily_digest(ctx: ContextTypes.DEFAULT_TYPE):
     hackathons = get_hackathons()
 
-    # Remove ended hackathons older than 1 day
     for h in hackathons:
         if days_left(h["end_date"]) < -1:
-            supabase.table("hackathons").delete().eq("id", h["id"]).execute()
+            delete_hackathon(h["id"])
 
-    # Refresh after cleanup
     hackathons = get_hackathons()
-    msg = format_digest(hackathons)
-
-    await ctx.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+    await ctx.bot.send_message(chat_id=CHAT_ID, text=format_digest(hackathons), parse_mode="Markdown")
 
 
 async def set_commands(app: Application):
@@ -199,7 +205,6 @@ def main():
     app.add_handler(remove_conv)
     app.add_handler(CommandHandler("list", list_hackathons))
 
-    # Schedule daily digest at 6am WAT
     job_queue = app.job_queue
     target_time = datetime.now(TIMEZONE).replace(hour=6, minute=0, second=0, microsecond=0)
     job_queue.run_daily(daily_digest, time=target_time.timetz())
