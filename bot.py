@@ -198,13 +198,18 @@ async def edit_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f"{i}. {h['name']}")
 
     ctx.user_data["hackathons"] = hackathons
-    await update.message.reply_text("\n".join(lines))
+    kb = ReplyKeyboardMarkup([[KeyboardButton("❌ Cancel")]], resize_keyboard=True)
+    await update.message.reply_text("\n".join(lines), reply_markup=kb)
     return EDIT_SELECT
 
 
 async def edit_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     hackathons = ctx.user_data.get("hackathons", [])
     raw = update.message.text.strip()
+
+    if raw == "❌ Cancel":
+        await update.message.reply_text("Edit cancelled.", reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
 
     try:
         idx = int(raw) - 1
@@ -216,7 +221,8 @@ async def edit_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     ctx.user_data["edit_hackathon"] = hackathons[idx]
     kb = ReplyKeyboardMarkup([
-        [KeyboardButton("Name"), KeyboardButton("Date"), KeyboardButton("Link")]
+        [KeyboardButton("Name"), KeyboardButton("Date"), KeyboardButton("Link")],
+        [KeyboardButton("❌ Cancel")]
     ], resize_keyboard=True)
     await update.message.reply_text("What field do you want to edit?", reply_markup=kb)
     return EDIT_FIELD
@@ -224,15 +230,23 @@ async def edit_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def edit_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     field = update.message.text.strip().lower()
+
+    if field == "❌ cancel":
+        await update.message.reply_text("Edit cancelled.", reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+
     if field == "name":
         ctx.user_data["edit_field"] = "name"
-        await update.message.reply_text("Enter the new name:")
+        kb = ReplyKeyboardMarkup([[KeyboardButton("❌ Cancel")]], resize_keyboard=True)
+        await update.message.reply_text("Enter the new name:", reply_markup=kb)
     elif field == "date":
         ctx.user_data["edit_field"] = "end_date"
-        await update.message.reply_text("Enter the new date (YYYY-MM-DD):")
+        kb = ReplyKeyboardMarkup([[KeyboardButton("❌ Cancel")]], resize_keyboard=True)
+        await update.message.reply_text("Enter the new date (YYYY-MM-DD):", reply_markup=kb)
     elif field == "link":
         ctx.user_data["edit_field"] = "link"
-        await update.message.reply_text("Enter the new link (http/https):")
+        kb = ReplyKeyboardMarkup([[KeyboardButton("❌ Cancel")]], resize_keyboard=True)
+        await update.message.reply_text("Enter the new link (http/https):", reply_markup=kb)
     else:
         await update.message.reply_text("Invalid field. Choose Name, Date, or Link.")
         return EDIT_FIELD
@@ -242,6 +256,11 @@ async def edit_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def edit_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     raw = update.message.text.strip()
+
+    if raw == "❌ Cancel":
+        await update.message.reply_text("Edit cancelled.", reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+
     field = ctx.user_data["edit_field"]
     hackathon = ctx.user_data["edit_hackathon"]
 
