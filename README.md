@@ -4,8 +4,9 @@ A Telegram bot that tracks hackathon deadlines and sends a daily digest at 6am W
 
 ## Features
 
-- Add hackathons with a name and end date
-- View all tracked hackathons with days remaining
+- Add hackathons with a name, end date, and link
+- View all tracked hackathons with days remaining and clickable links
+- Edit hackathon details (name, date, or link)
 - Remove hackathons from the list
 - Daily digest sent automatically at 6am WAT
 - Warns when a hackathon is ending within 7 days
@@ -18,8 +19,9 @@ A Telegram bot that tracks hackathon deadlines and sends a daily digest at 6am W
 | `/start` | Show available commands |
 | `/add` | Add a new hackathon |
 | `/list` | View all hackathons and their deadlines |
+| `/edit` | Edit a hackathon (name, date, or link) |
 | `/remove` | Remove a hackathon |
-| `/cancel` | Cancel an ongoing add/remove operation |
+| `/cancel` | Cancel an ongoing operation |
 
 ## Setup
 
@@ -38,6 +40,7 @@ Create a `hackathons` table with the following columns:
 | `id` | int8 (primary key) |
 | `name` | text |
 | `end_date` | date |
+| `link` | text (nullable) |
 | `added_by` | text |
 
 ### Environment Variables

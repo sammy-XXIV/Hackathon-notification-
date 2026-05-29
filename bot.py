@@ -22,11 +22,12 @@ HEADERS = {
 REST = f"{SUPABASE_URL}/rest/v1/hackathons"
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [[KeyboardButton("📋 List"), KeyboardButton("➕ Add"), KeyboardButton("🗑️ Remove")]],
+    [[KeyboardButton("📋 List"), KeyboardButton("➕ Add"), KeyboardButton("✏️ Edit"), KeyboardButton("🗑️ Remove")]],
     resize_keyboard=True,
 )
 
-WAITING_NAME, WAITING_DATE = range(2)
+WAITING_NAME, WAITING_DATE, WAITING_LINK = range(3)
+EDIT_SELECT, EDIT_FIELD, EDIT_VALUE = range(3, 6)
 WARNING_DAYS = 7
 TIMEZONE = pytz.timezone("Africa/Lagos")
 
@@ -37,12 +38,18 @@ def get_hackathons():
     return res.json() if res.is_success else []
 
 
-def insert_hackathon(name, end_date, added_by):
+def insert_hackathon(name, end_date, added_by, link):
     httpx.post(REST, headers={**HEADERS, "Prefer": "return=minimal"}, json={
         "name": name,
         "end_date": end_date,
         "added_by": added_by,
+        "link": link,
     })
+
+
+def update_hackathon(hackathon_id, field, value):
+    httpx.patch(REST, headers={**HEADERS, "Prefer": "return=minimal"},
+                params={"id": f"eq.{hackathon_id}"}, json={field: value})
 
 
 def delete_hackathon(hackathon_id):
@@ -57,7 +64,7 @@ def format_digest(hackathons):
     if not hackathons:
         return "No hackathons listed yet. Use /add to add one."
 
-    lines = ["📋 *Hackathon Tracker*\n"]
+    lines = ["<b>📋 Hackathon Tracker</b>\n"]
     warnings = []
 
     for h in hackathons:
@@ -74,10 +81,11 @@ def format_digest(hackathons):
         else:
             status = f"🟢 {dl}d left"
 
-        lines.append(f"*{h['name']}*\n└ {end} — {status}\n")
+        link_part = f' — <a href="{h["link"]}">link</a>' if h.get("link") else ""
+        lines.append(f"<b>{h['name']}</b>\n└ {end} — {status}{link_part}\n")
 
     if warnings:
-        lines.append("⚠️ *Ending soon:* " + ", ".join(warnings))
+        lines.append("⚠️ <b>Ending soon:</b> " + ", ".join(warnings))
 
     return "\n".join(lines)
 
@@ -111,14 +119,26 @@ async def add_date(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Invalid date. Use YYYY-MM-DD format (e.g. 2025-06-30)")
         return WAITING_DATE
 
-    name = ctx.user_data["hack_name"]
-    added_by = update.effective_user.username or update.effective_user.first_name
-    insert_hackathon(name, str(parsed), added_by)
+    ctx.user_data["hack_date"] = str(parsed)
+    await update.message.reply_text("What's the hackathon link? (e.g. https://example.com)")
+    return WAITING_LINK
 
-    dl = days_left(str(parsed))
+
+async def add_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    raw = update.message.text.strip()
+    if not raw.startswith("http"):
+        await update.message.reply_text("Invalid URL. Must start with http:// or https://")
+        return WAITING_LINK
+
+    name = ctx.user_data["hack_name"]
+    end_date = ctx.user_data["hack_date"]
+    added_by = update.effective_user.username or update.effective_user.first_name
+    insert_hackathon(name, end_date, added_by, raw)
+
+    dl = days_left(end_date)
     await update.message.reply_text(
-        f"✅ *{name}* added!\nEnds: {parsed.strftime('%b %d, %Y')} ({dl} days left)",
-        parse_mode="Markdown",
+        f"✅ <b>{name}</b> added!\nEnds: {date.fromisoformat(end_date).strftime('%b %d, %Y')} ({dl} days left)",
+        parse_mode="HTML",
         reply_markup=MAIN_KEYBOARD,
     )
     return ConversationHandler.END
@@ -131,7 +151,7 @@ async def add_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def list_hackathons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     hackathons = get_hackathons()
-    await update.message.reply_text(format_digest(hackathons), parse_mode="Markdown")
+    await update.message.reply_text(format_digest(hackathons), parse_mode="HTML")
 
 
 async def remove_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -163,7 +183,89 @@ async def remove_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     h = hackathons[idx]
     delete_hackathon(h["id"])
-    await update.message.reply_text(f"🗑️ *{h['name']}* removed.", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(f"🗑️ <b>{h['name']}</b> removed.", parse_mode="HTML", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
+
+
+async def edit_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    hackathons = get_hackathons()
+    if not hackathons:
+        await update.message.reply_text("No hackathons to edit.")
+        return ConversationHandler.END
+
+    lines = ["Which hackathon do you want to edit? Reply with the number:\n"]
+    for i, h in enumerate(hackathons, 1):
+        lines.append(f"{i}. {h['name']}")
+
+    ctx.user_data["hackathons"] = hackathons
+    await update.message.reply_text("\n".join(lines))
+    return EDIT_SELECT
+
+
+async def edit_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    hackathons = ctx.user_data.get("hackathons", [])
+    raw = update.message.text.strip()
+
+    try:
+        idx = int(raw) - 1
+        if idx < 0 or idx >= len(hackathons):
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("Send a valid number.")
+        return EDIT_SELECT
+
+    ctx.user_data["edit_hackathon"] = hackathons[idx]
+    kb = ReplyKeyboardMarkup([
+        [KeyboardButton("Name"), KeyboardButton("Date"), KeyboardButton("Link")]
+    ], resize_keyboard=True)
+    await update.message.reply_text("What field do you want to edit?", reply_markup=kb)
+    return EDIT_FIELD
+
+
+async def edit_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    field = update.message.text.strip().lower()
+    if field == "name":
+        ctx.user_data["edit_field"] = "name"
+        await update.message.reply_text("Enter the new name:")
+    elif field == "date":
+        ctx.user_data["edit_field"] = "end_date"
+        await update.message.reply_text("Enter the new date (YYYY-MM-DD):")
+    elif field == "link":
+        ctx.user_data["edit_field"] = "link"
+        await update.message.reply_text("Enter the new link (http/https):")
+    else:
+        await update.message.reply_text("Invalid field. Choose Name, Date, or Link.")
+        return EDIT_FIELD
+
+    return EDIT_VALUE
+
+
+async def edit_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    raw = update.message.text.strip()
+    field = ctx.user_data["edit_field"]
+    hackathon = ctx.user_data["edit_hackathon"]
+
+    if field == "end_date":
+        try:
+            parsed = date.fromisoformat(raw)
+            value = str(parsed)
+        except ValueError:
+            await update.message.reply_text("Invalid date. Use YYYY-MM-DD format.")
+            return EDIT_VALUE
+    elif field == "link":
+        if not raw.startswith("http"):
+            await update.message.reply_text("Invalid URL. Must start with http:// or https://")
+            return EDIT_VALUE
+        value = raw
+    else:
+        value = raw
+
+    update_hackathon(hackathon["id"], field, value)
+    await update.message.reply_text(
+        f"✅ <b>{hackathon['name']}</b> updated!",
+        parse_mode="HTML",
+        reply_markup=MAIN_KEYBOARD,
+    )
     return ConversationHandler.END
 
 
@@ -175,7 +277,7 @@ async def daily_digest(ctx: ContextTypes.DEFAULT_TYPE):
             delete_hackathon(h["id"])
 
     hackathons = get_hackathons()
-    await ctx.bot.send_message(chat_id=CHAT_ID, text=format_digest(hackathons), parse_mode="Markdown")
+    await ctx.bot.send_message(chat_id=CHAT_ID, text=format_digest(hackathons), parse_mode="HTML")
 
 
 async def handle_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -184,6 +286,8 @@ async def handle_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await list_hackathons(update, ctx)
     elif text == "➕ Add":
         return await add_start(update, ctx)
+    elif text == "✏️ Edit":
+        return await edit_start(update, ctx)
     elif text == "🗑️ Remove":
         return await remove_start(update, ctx)
 
@@ -193,6 +297,7 @@ async def set_commands(app: Application):
         BotCommand("start", "Show available commands"),
         BotCommand("add", "Add a new hackathon"),
         BotCommand("list", "View all hackathons"),
+        BotCommand("edit", "Edit a hackathon"),
         BotCommand("remove", "Remove a hackathon"),
         BotCommand("cancel", "Cancel current operation"),
     ])
@@ -206,6 +311,7 @@ def main():
         states={
             WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
             WAITING_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_date)],
+            WAITING_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_link)],
         },
         fallbacks=[CommandHandler("cancel", add_cancel)],
     )
@@ -218,9 +324,20 @@ def main():
         fallbacks=[CommandHandler("cancel", add_cancel)],
     )
 
+    edit_conv = ConversationHandler(
+        entry_points=[CommandHandler("edit", edit_start)],
+        states={
+            EDIT_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_select)],
+            EDIT_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field)],
+            EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_value)],
+        },
+        fallbacks=[CommandHandler("cancel", add_cancel)],
+    )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(add_conv)
     app.add_handler(remove_conv)
+    app.add_handler(edit_conv)
     app.add_handler(CommandHandler("list", list_hackathons))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
 
