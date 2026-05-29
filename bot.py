@@ -324,12 +324,12 @@ async def handle_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def set_commands(app: Application):
     await app.bot.set_my_commands([
-        BotCommand("start", "Show available commands"),
-        BotCommand("add", "Add a new hackathon"),
-        BotCommand("list", "View all hackathons"),
-        BotCommand("edit", "Edit a hackathon"),
-        BotCommand("remove", "Remove a hackathon"),
-        BotCommand("cancel", "Cancel current operation"),
+        BotCommand("start", "Start the bot and show main menu"),
+        BotCommand("add", "Add a new hackathon with name, date, and link"),
+        BotCommand("list", "View all tracked hackathons with deadlines"),
+        BotCommand("edit", "Edit hackathon details (name, date, or link)"),
+        BotCommand("remove", "Remove a hackathon from the list"),
+        BotCommand("cancel", "Cancel the current operation"),
     ])
 
 
