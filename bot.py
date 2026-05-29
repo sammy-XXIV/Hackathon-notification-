@@ -2,8 +2,8 @@ import os
 import logging
 import httpx
 from datetime import datetime, date
-from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
+from telegram import Update, BotCommand, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters, CallbackQueryHandler
 import pytz
 
 logging.basicConfig(level=logging.INFO)
@@ -21,10 +21,12 @@ HEADERS = {
 }
 REST = f"{SUPABASE_URL}/rest/v1/hackathons"
 
-MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [[KeyboardButton("📋 List"), KeyboardButton("➕ Add"), KeyboardButton("✏️ Edit"), KeyboardButton("🗑️ Remove")]],
-    resize_keyboard=True,
-)
+MAIN_MENU = InlineKeyboardMarkup([
+    [InlineKeyboardButton("📋 List", callback_data="list")],
+    [InlineKeyboardButton("➕ Add", callback_data="add")],
+    [InlineKeyboardButton("✏️ Edit", callback_data="edit")],
+    [InlineKeyboardButton("🗑️ Remove", callback_data="remove")],
+])
 
 WAITING_NAME, WAITING_DATE, WAITING_LINK = range(3)
 EDIT_SELECT, EDIT_FIELD, EDIT_VALUE = range(3, 6)
@@ -92,16 +94,15 @@ def format_digest(hackathons):
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Hackathon Tracker Bot\n\n"
-        "/add — add a hackathon\n"
-        "/list — view all hackathons\n"
-        "/remove — remove a hackathon",
-        reply_markup=MAIN_KEYBOARD,
+        "👋 Hackathon Tracker Bot\n\nChoose an action:",
+        reply_markup=MAIN_MENU,
     )
 
 
 async def add_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("What's the hackathon name?")
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("What's the hackathon name?")
     return WAITING_NAME
 
 
@@ -136,54 +137,61 @@ async def add_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     insert_hackathon(name, end_date, added_by, raw)
 
     dl = days_left(end_date)
+    kb = MAIN_MENU
     await update.message.reply_text(
         f"✅ <b>{name}</b> added!\nEnds: {date.fromisoformat(end_date).strftime('%b %d, %Y')} ({dl} days left)",
         parse_mode="HTML",
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=kb,
     )
     return ConversationHandler.END
 
 
 async def add_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cancelled.", reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text("Cancelled.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
 
 async def list_hackathons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
     hackathons = get_hackathons()
-    await update.message.reply_text(format_digest(hackathons), parse_mode="HTML")
+    kb = MAIN_MENU
+    await query.edit_message_text(format_digest(hackathons), parse_mode="HTML", reply_markup=kb)
 
 
 async def remove_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
     hackathons = get_hackathons()
     if not hackathons:
-        await update.message.reply_text("No hackathons to remove.")
-        return
+        await query.edit_message_text("No hackathons to remove.")
+        return ConversationHandler.END
 
-    lines = ["Which hackathon do you want to remove? Reply with the number:\n"]
-    for i, h in enumerate(hackathons, 1):
-        lines.append(f"{i}. {h['name']}")
-
-    ctx.user_data["hackathons"] = hackathons
-    await update.message.reply_text("\n".join(lines))
+    ctx.user_data["hackathons"] = {h["id"]: h for h in hackathons}
+    buttons = [[InlineKeyboardButton(h["name"], callback_data=f"remove_sel_{h['id']}")] for h in hackathons]
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="remove_cancel")])
+    kb = InlineKeyboardMarkup(buttons)
+    await query.edit_message_text("Which hackathon do you want to remove?", reply_markup=kb)
     return "WAITING_REMOVE"
 
 
 async def remove_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    hackathons = ctx.user_data.get("hackathons", [])
-    raw = update.message.text.strip()
+    query = update.callback_query
+    await query.answer()
 
-    try:
-        idx = int(raw) - 1
-        if idx < 0 or idx >= len(hackathons):
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text("Send a valid number.")
-        return "WAITING_REMOVE"
+    if query.data == "remove_cancel":
+        await query.edit_message_text("Remove cancelled.")
+        return ConversationHandler.END
 
-    h = hackathons[idx]
+    hackathons = ctx.user_data.get("hackathons", {})
+    hackathon_id = int(query.data.split("_")[2])
+    h = hackathons[hackathon_id]
+
     delete_hackathon(h["id"])
-    await update.message.reply_text(f"🗑️ <b>{h['name']}</b> removed.", parse_mode="HTML", reply_markup=MAIN_KEYBOARD)
+    kb = MAIN_MENU
+    await query.edit_message_text(f"🗑️ <b>{h['name']}</b> removed.", parse_mode="HTML", reply_markup=kb)
     return ConversationHandler.END
 
 
@@ -193,74 +201,72 @@ async def edit_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No hackathons to edit.")
         return ConversationHandler.END
 
-    lines = ["Which hackathon do you want to edit? Reply with the number:\n"]
-    for i, h in enumerate(hackathons, 1):
-        lines.append(f"{i}. {h['name']}")
-
-    ctx.user_data["hackathons"] = hackathons
-    kb = ReplyKeyboardMarkup([[KeyboardButton("❌ Cancel")]], resize_keyboard=True)
-    await update.message.reply_text("\n".join(lines), reply_markup=kb)
+    ctx.user_data["hackathons"] = {h["id"]: h for h in hackathons}
+    buttons = [[InlineKeyboardButton(h["name"], callback_data=f"edit_sel_{h['id']}")] for h in hackathons]
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="edit_cancel")])
+    kb = InlineKeyboardMarkup(buttons)
+    await update.message.reply_text("Which hackathon do you want to edit?", reply_markup=kb)
     return EDIT_SELECT
 
 
 async def edit_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    hackathons = ctx.user_data.get("hackathons", [])
-    raw = update.message.text.strip()
+    query = update.callback_query
+    await query.answer()
 
-    if raw == "❌ Cancel":
-        await update.message.reply_text("Edit cancelled.", reply_markup=MAIN_KEYBOARD)
+    if query.data == "edit_cancel":
+        await query.edit_message_text("Edit cancelled.")
         return ConversationHandler.END
 
-    try:
-        idx = int(raw) - 1
-        if idx < 0 or idx >= len(hackathons):
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text("Send a valid number.")
-        return EDIT_SELECT
+    hackathons = ctx.user_data.get("hackathons", {})
+    hackathon_id = int(query.data.split("_")[2])
+    ctx.user_data["edit_hackathon"] = hackathons[hackathon_id]
 
-    ctx.user_data["edit_hackathon"] = hackathons[idx]
-    kb = ReplyKeyboardMarkup([
-        [KeyboardButton("Name"), KeyboardButton("Date"), KeyboardButton("Link")],
-        [KeyboardButton("❌ Cancel")]
-    ], resize_keyboard=True)
-    await update.message.reply_text("What field do you want to edit?", reply_markup=kb)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Name", callback_data="edit_field_name")],
+        [InlineKeyboardButton("Date", callback_data="edit_field_end_date")],
+        [InlineKeyboardButton("Link", callback_data="edit_field_link")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="edit_cancel")],
+    ])
+    await query.edit_message_text("What field do you want to edit?", reply_markup=kb)
     return EDIT_FIELD
 
 
 async def edit_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    field = update.message.text.strip().lower()
+    query = update.callback_query
+    await query.answer()
 
-    if field == "❌ cancel":
-        await update.message.reply_text("Edit cancelled.", reply_markup=MAIN_KEYBOARD)
+    field_map = {"name": "name", "end_date": "end_date", "link": "link"}
+    field = query.data.split("_")[2]
+
+    if field == "cancel":
+        await query.edit_message_text("Edit cancelled.")
         return ConversationHandler.END
 
-    if field == "name":
-        ctx.user_data["edit_field"] = "name"
-        kb = ReplyKeyboardMarkup([[KeyboardButton("❌ Cancel")]], resize_keyboard=True)
-        await update.message.reply_text("Enter the new name:", reply_markup=kb)
-    elif field == "date":
-        ctx.user_data["edit_field"] = "end_date"
-        kb = ReplyKeyboardMarkup([[KeyboardButton("❌ Cancel")]], resize_keyboard=True)
-        await update.message.reply_text("Enter the new date (YYYY-MM-DD):", reply_markup=kb)
-    elif field == "link":
-        ctx.user_data["edit_field"] = "link"
-        kb = ReplyKeyboardMarkup([[KeyboardButton("❌ Cancel")]], resize_keyboard=True)
-        await update.message.reply_text("Enter the new link (http/https):", reply_markup=kb)
-    else:
-        await update.message.reply_text("Invalid field. Choose Name, Date, or Link.")
-        return EDIT_FIELD
+    ctx.user_data["edit_field"] = field
 
+    if field == "name":
+        msg = "Enter the new name:"
+    elif field == "end_date":
+        msg = "Enter the new date (YYYY-MM-DD):"
+    else:
+        msg = "Enter the new link (http/https):"
+
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="edit_cancel_value")]])
+    await query.edit_message_text(msg, reply_markup=kb)
     return EDIT_VALUE
 
 
 async def edit_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # Handle cancel button callback
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        if query.data == "edit_cancel_value":
+            await query.edit_message_text("Edit cancelled.")
+            return ConversationHandler.END
+
+    # Handle text input
     raw = update.message.text.strip()
-
-    if raw == "❌ Cancel":
-        await update.message.reply_text("Edit cancelled.", reply_markup=MAIN_KEYBOARD)
-        return ConversationHandler.END
-
     field = ctx.user_data["edit_field"]
     hackathon = ctx.user_data["edit_hackathon"]
 
@@ -280,10 +286,11 @@ async def edit_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         value = raw
 
     update_hackathon(hackathon["id"], field, value)
+    kb = MAIN_MENU
     await update.message.reply_text(
         f"✅ <b>{hackathon['name']}</b> updated!",
         parse_mode="HTML",
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=kb,
     )
     return ConversationHandler.END
 
@@ -300,14 +307,16 @@ async def daily_digest(ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "📋 List":
-        await list_hackathons(update, ctx)
-    elif text == "➕ Add":
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "list":
+        return await list_hackathons(update, ctx)
+    elif query.data == "add":
         return await add_start(update, ctx)
-    elif text == "✏️ Edit":
+    elif query.data == "edit":
         return await edit_start(update, ctx)
-    elif text == "🗑️ Remove":
+    elif query.data == "remove":
         return await remove_start(update, ctx)
 
 
@@ -326,7 +335,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(set_commands).build()
 
     add_conv = ConversationHandler(
-        entry_points=[CommandHandler("add", add_start)],
+        entry_points=[CallbackQueryHandler(add_start, pattern="^add$")],
         states={
             WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
             WAITING_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_date)],
@@ -336,29 +345,28 @@ def main():
     )
 
     remove_conv = ConversationHandler(
-        entry_points=[CommandHandler("remove", remove_start)],
+        entry_points=[CallbackQueryHandler(remove_start, pattern="^remove$")],
         states={
-            "WAITING_REMOVE": [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_select)],
+            "WAITING_REMOVE": [CallbackQueryHandler(remove_select, pattern="^remove_")],
         },
         fallbacks=[CommandHandler("cancel", add_cancel)],
     )
 
     edit_conv = ConversationHandler(
-        entry_points=[CommandHandler("edit", edit_start)],
+        entry_points=[CallbackQueryHandler(edit_start, pattern="^edit$")],
         states={
-            EDIT_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_select)],
-            EDIT_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field)],
-            EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_value)],
+            EDIT_SELECT: [CallbackQueryHandler(edit_select, pattern="^edit_sel_|^edit_cancel$")],
+            EDIT_FIELD: [CallbackQueryHandler(edit_field, pattern="^edit_field_")],
+            EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_value), CallbackQueryHandler(edit_value, pattern="^edit_cancel_value$")],
         },
         fallbacks=[CommandHandler("cancel", add_cancel)],
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_buttons, pattern="^(list|add|edit|remove)$"))
     app.add_handler(add_conv)
     app.add_handler(remove_conv)
     app.add_handler(edit_conv)
-    app.add_handler(CommandHandler("list", list_hackathons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
 
     job_queue = app.job_queue
     target_time = datetime.now(TIMEZONE).replace(hour=6, minute=0, second=0, microsecond=0)
