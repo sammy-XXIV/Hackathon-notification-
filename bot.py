@@ -238,18 +238,17 @@ async def edit_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    field_map = {"name": "name", "end_date": "end_date", "link": "link"}
-    field = query.data.split("_")[2]
+    data = query.data.replace("edit_field_", "")
 
-    if field == "cancel":
+    if data == "cancel":
         await query.edit_message_text("Edit cancelled.")
         return ConversationHandler.END
 
-    ctx.user_data["edit_field"] = field
+    ctx.user_data["edit_field"] = data
 
-    if field == "name":
+    if data == "name":
         msg = "Enter the new name:"
-    elif field == "end_date":
+    elif data == "end_date":
         msg = "Enter the new date (YYYY-MM-DD):"
     else:
         msg = "Enter the new link (http/https):"
