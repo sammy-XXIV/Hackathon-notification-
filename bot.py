@@ -363,10 +363,10 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_buttons, pattern="^(list|add|edit|remove)$"))
     app.add_handler(add_conv)
     app.add_handler(remove_conv)
     app.add_handler(edit_conv)
+    app.add_handler(CallbackQueryHandler(handle_buttons, pattern="^list$"))
 
     job_queue = app.job_queue
     target_time = datetime.now(TIMEZONE).replace(hour=6, minute=0, second=0, microsecond=0)
