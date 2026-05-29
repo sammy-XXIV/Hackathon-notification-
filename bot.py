@@ -196,16 +196,19 @@ async def remove_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def edit_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
     hackathons = get_hackathons()
     if not hackathons:
-        await update.message.reply_text("No hackathons to edit.")
+        await query.edit_message_text("No hackathons to edit.")
         return ConversationHandler.END
 
     ctx.user_data["hackathons"] = {h["id"]: h for h in hackathons}
     buttons = [[InlineKeyboardButton(h["name"], callback_data=f"edit_sel_{h['id']}")] for h in hackathons]
     buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="edit_cancel")])
     kb = InlineKeyboardMarkup(buttons)
-    await update.message.reply_text("Which hackathon do you want to edit?", reply_markup=kb)
+    await query.edit_message_text("Which hackathon do you want to edit?", reply_markup=kb)
     return EDIT_SELECT
 
 
